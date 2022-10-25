@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CI resources"
+
+Parameters:
+  SourceCodeRepositoryURL:
+    Type: "String"
+
+Mappings:
+  Constraints:
+    BuildResources:
+      CodeBuildImage: "aws/codebuild/standard:5.0"
+      ComputeType: BUILD_GENERAL1_SMALL
+      BuildSpec: "ci/code-build/buildspec.yml"
+
+Resources:
+  UnitTestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !Ref UnitTestProjectRole
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: !FindInMap [Constraints, BuildResources, ComputeType]
+        Image: !FindInMap [Constraints, BuildResources, CodeBuildImage]
+        PrivilegedMode: true
+      Source:
+        Type: GITHUB
+        Auth:
+          Type: OAUTH
+        Location: !Ref SourceCodeRepositoryURL
+        BuildSpec: !FindInMap [Constraints, BuildResources, BuildSpec]
+        GitCloneDepth: 1
+        ReportBuildStatus: true
+      BadgeEnabled: false
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE
+      Triggers:
+        # Pull Request に関連するイベントトリガー
+        # FilterGroups:
+        #   - Type: EVENT
+        #     Pattern: "PULL_REQUEST_CREATED, PULL_REQUEST_UPDATED, PULL_REQUEST_REOPENED"
+        #     ExcludeMatchedPattern: false
+
+        # main, develop ブランチ以外への PUSH イベントトリガー
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: "PUSH"
+              ExcludeMatchedPattern: false
+            - Type: HEAD_REF
+              Pattern: "^refs/heads/main$"
+              ExcludeMatchedPattern: true
+            - Type: HEAD_REF
+              Pattern: "^refs/heads/develop$"
+              ExcludeMatchedPattern: true
+            - Type: HEAD_REF
+              Pattern: "^refs/tags/.*"
+              ExcludeMatchedPattern: true
+        Webhook: true
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref UnitTestProjectLogsGroup
+      TimeoutInMinutes: 5
+
+  UnitTestProjectPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: "/"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - logs:*
+            Effect: Allow
+            Resource: "*"
+
+  UnitTestProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref UnitTestProjectPolicy
+
+  UnitTestProjectLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
